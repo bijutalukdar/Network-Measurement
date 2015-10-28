@@ -1,0 +1,81 @@
+#!/bin/sh
+#
+# Copyright (C) 2007-2011 Netronome Systems, Inc.  All rights reserved.
+#
+# File:        nssupervisord
+# Description: Supervisor daemon that monitors XScale / ARM services
+#              and restarts them when they are not running.
+#              This is an example illustrating a mechanism that can
+#              improve robustness of XScale / ARM based software.
+#              Modify this as appropriate for your circumstances,
+#              or deploy an equivalent daemon monitoring / restarting
+#              solution on the host.
+
+CHECK_INTERVAL=2
+MAX_RESTART_ATTEMPTS=10
+
+VERSION=1.0
+
+# Services to monitor (in startup order)
+# Note: for the NFP platform, remove platformd, as this functionality
+# has been moved to the host.
+services="
+        platformd
+	nfmmsgd
+	tcammsgd
+"
+# Commands to start services
+cmd_nfmmsgd="/etc/init.d/nfm start_daemon"
+cmd_tcammsgd="/etc/init.d/tcam start"
+cmd_platformd="/etc/init.d/platform start"
+
+DAEMON_NAME=$(basename $0)
+
+LOG="logger -t $DAEMON_NAME -p daemon."
+LOG_INFO="${LOG}info"
+LOG_WARN="${LOG}warn"
+LOG_ERROR="${LOG}error"
+
+check_service() {
+	[ -z "$1" ] && return
+	local name=$1
+	if ! pidof $name >/dev/null 2>&1; then
+		[ "$(eval echo \$failcount_$name)" == $MAX_RESTART_ATTEMPTS ] && return 1
+		$LOG_WARN "$svc not running, restarting"
+		cmd=$(eval echo \$cmd_$name)
+		[ -z "$cmd" ] && return 1
+		$cmd >/dev/null 2>&1
+		if [ $? != 0 ]; then
+			eval let failcount_$name++
+			local msg="Failed to restart $svc"
+			if [ $(eval echo \$failcount_$name) == $MAX_RESTART_ATTEMPTS ]; then
+				msg="$msg - giving up"
+			fi
+			$LOG_ERROR "$msg"
+		fi
+	else
+		eval failcount_$name=0
+	fi
+}
+
+terminate() {
+	running=0
+}
+
+
+for svc in $services; do
+	eval failcount_$svc=0
+done
+
+running=1
+trap terminate INT TERM
+
+$LOG_INFO "$DAEMON_NAME $VERSION starting"
+while [ $running == 1 ]; do
+	for svc in $services; do
+		check_service $svc
+	done
+	[ $running == 1 ] && sleep $CHECK_INTERVAL
+done
+$LOG_INFO "$DAEMON_NAME terminating"
+
